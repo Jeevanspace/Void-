@@ -1,0 +1,11 @@
+streamlit
+groq
+google-generativeai
+gTTS
+googlesearch-python
+requests
+beautifulsoup4
+PyPDF2
+Pillow
+
+
