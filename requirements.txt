@@ -2,10 +2,12 @@ streamlit
 groq
 google-generativeai
 gTTS
-googlesearch-python
+duckduckgo-search
 requests
 beautifulsoup4
 PyPDF2
 Pillow
-
+streamlit-mic-recorder
+pydub
+SpeechRecognition
 
