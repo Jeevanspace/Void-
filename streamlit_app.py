@@ -2,28 +2,29 @@ import streamlit as st
 from groq import Groq
 import google.generativeai as genai
 from gtts import gTTS
-import requests
-from bs4 import BeautifulSoup
-from googlesearch import search
+import speech_recognition as sr
+from streamlit_mic_recorder import mic_recorder
+from duckduckgo_search import DDGS
 import PyPDF2
 from PIL import Image
+from pydub import AudioSegment
 import io
 import base64
 import datetime
 import uuid
+import random
 
 # ==============================================================================
 # 1. CONFIGURATION
 # ==============================================================================
-st.set_page_config(page_title="VOID by G1", page_icon="🧿", layout="wide")
+st.set_page_config(page_title="VOID OMNI", page_icon="🧿", layout="wide", initial_sidebar_state="collapsed")
 
-# ⚠️ SECRETS (We will set these in the Cloud Settings later)
-# If running locally, you can paste keys here, but for Cloud, use st.secrets
+# Load Secrets
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
-    st.error("API Keys missing! Please set them in Streamlit Secrets.")
+    st.error("⚠️ API KEYS MISSING! Check Streamlit Secrets.")
     st.stop()
 
 client_groq = Groq(api_key=GROQ_API_KEY)
@@ -32,175 +33,237 @@ model_vision = genai.GenerativeModel('gemini-1.5-flash')
 
 CREATOR_NAME = "Jeevan Kumar"
 CREATOR_TITLE = "Boss"
-PASSCODE = "G15002"
 
 # ==============================================================================
-# 2. CORE ENGINES
+# 2. UI THEME (SPACEX / IRON MAN STYLE)
 # ==============================================================================
-
-def google_search_engine(query):
-    """Real Google Search + Website Scraping"""
-    try:
-        # 1. Search Google
-        # We try to get 3 good results
-        results = list(search(query, num_results=3, advanced=True))
+def inject_css():
+    st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;900&family=Rajdhani:wght@400;600&display=swap');
         
-        intel = []
-        for r in results:
-            try:
-                # 2. Visit Website (Scraping)
-                page = requests.get(r.url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
-                soup = BeautifulSoup(page.text, 'html.parser')
-                # Get first 500 characters of text
-                text = soup.get_text()[:500].replace("\n", " ")
-                intel.append(f"SOURCE: {r.title}\nLINK: {r.url}\nINFO: {text}")
-            except: continue
-            
-        return "\n\n".join(intel)
-    except Exception as e:
-        return None
+        /* DEEP SPACE BACKGROUND */
+        .stApp {
+            background-color: #000000;
+            background-image: 
+                radial-gradient(circle at 50% 50%, #1a1a2e 0%, #000000 100%),
+                url("https://www.transparenttextures.com/patterns/stardust.png");
+            color: #E0E0E0;
+            font-family: 'Rajdhani', sans-serif;
+        }
 
-def generate_image(prompt):
-    """Image Generation via Pollinations (No Key Needed)"""
-    clean_prompt = prompt.replace(" ", "%20")
-    return f"https://image.pollinations.ai/prompt/{clean_prompt}"
+        /* NEON HEADER */
+        .hero-text {
+            font-family: 'Orbitron', sans-serif;
+            text-align: center;
+            font-size: 3rem;
+            background: linear-gradient(90deg, #00E5FF, #0072FF);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 20px rgba(0, 229, 255, 0.5);
+            margin-bottom: 0px;
+        }
+        
+        /* CHAT BUBBLES (GLASSMORPHISM) */
+        .stChatMessage {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(0, 229, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+        .stChatMessage[data-testid="user"] {
+            border-right: 3px solid #FFFFFF;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .stChatMessage[data-testid="assistant"] {
+            border-left: 3px solid #00E5FF;
+            background: rgba(0, 229, 255, 0.02);
+        }
 
-def analyze_file(uploaded_file):
-    """Reads PDFs and Images"""
-    if uploaded_file.type == "application/pdf":
-        reader = PyPDF2.PdfReader(uploaded_file)
-        text = ""
-        for page in reader.pages[:5]: # Limit to first 5 pages for speed
-            text += page.extract_text()
-        return f"PDF CONTENT:\n{text}"
-    
-    elif "image" in uploaded_file.type:
-        img = Image.open(uploaded_file)
-        # We return the image object for the logic to handle later
-        return img
-    return None
+        /* INPUT FIELD */
+        .stTextInput input {
+            background-color: #050505 !important;
+            color: #00E5FF !important;
+            border: 1px solid #00E5FF !important;
+            border-radius: 25px;
+            font-family: 'Orbitron';
+            text-align: center;
+        }
+
+        /* AUDIO PLAYER */
+        audio { width: 100%; height: 30px; filter: invert(1) hue-rotate(180deg); }
+        </style>
+    """, unsafe_allow_html=True)
+
+inject_css()
+
+# ==============================================================================
+# 3. CORE ENGINES (VOICE, SEARCH, VISION)
+# ==============================================================================
+
+def audio_to_text(audio_bytes):
+    """Converts Browser Audio (WebM) to Text"""
+    try:
+        # Convert WebM to WAV in memory
+        audio_io = io.BytesIO(audio_bytes)
+        sound = AudioSegment.from_file(audio_io)
+        wav_io = io.BytesIO()
+        sound.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        # Recognize
+        r = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            audio_data = r.record(source)
+            text = r.recognize_google(audio_data)
+            return text
+    except: return None
 
 def speak(text):
-    """Mobile-Compatible Audio Player"""
+    """Generates Voice Response"""
     try:
         tts = gTTS(text=text, lang='en', slow=False)
         mp3_fp = io.BytesIO()
         tts.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
         b64 = base64.b64encode(mp3_fp.read()).decode()
+        
+        # Visible Player for Mobile Compatibility
         md = f"""
-            <audio autoplay="true">
+            <audio controls autoplay>
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
             </audio>
             """
         st.markdown(md, unsafe_allow_html=True)
     except: pass
 
+def search_web(query):
+    """Real-Time Internet Search"""
+    try:
+        results = DDGS().text(query, max_results=3)
+        if results:
+            return "\n".join([f"• {r['body']}" for r in results])
+    except: return None
+
+def generate_image(prompt):
+    """AI Image Generator"""
+    clean = prompt.replace(" ", "%20")
+    # Using Pollinations AI
+    return f"https://image.pollinations.ai/prompt/{clean}?nologo=true"
+
 # ==============================================================================
-# 3. THE BRAIN
+# 4. THE BRAIN
 # ==============================================================================
-def brain_process(user_input, file_data=None):
+def brain_engine(user_input, file_context=None):
     # A. IMAGE GENERATION CHECK
-    if any(x in user_input.lower() for x in ["generate image", "create image", "draw"]):
-        prompt = user_input.lower().replace("generate image", "").replace("create image", "").replace("draw", "").strip()
-        img_url = generate_image(prompt)
-        return "IMG", img_url
+    if any(x in user_input.lower() for x in ["generate image", "create image", "draw a", "make a picture"]):
+        prompt = user_input.lower().replace("generate image", "").replace("draw a", "").strip()
+        return "IMG", generate_image(prompt)
 
-    # B. VISION / FILE CHECK
-    file_context = ""
-    if file_data:
-        if isinstance(file_data, str): # It's a PDF text
-            file_context = file_data
-        else: # It's an Image object
-            response = model_vision.generate_content([user_input, file_data])
-            return "TXT", response.text
-
-    # C. GOOGLE SEARCH CHECK
+    # B. SEARCH CHECK (Live Data)
     web_data = ""
     ignore = ["hi", "hello", "void", "thanks"]
     if not any(x == user_input.lower().strip() for x in ignore) and not file_context:
-        web_data = google_search_engine(user_input)
+        web_data = search_web(user_input)
 
-    # D. FINAL PROMPT
+    # C. PROMPT CONSTRUCTION
     current_time = datetime.datetime.now().strftime("%A, %I:%M %p")
     system = f"""
-    You are VOID by G1. Owner: {CREATOR_NAME}. Time: {current_time}.
-    Directives: Be concise, smart, and loyal.
+    You are VOID, the Advanced AI of {CREATOR_NAME}.
+    Time: {current_time}.
+    Directives:
+    1. Be highly intelligent, concise, and loyal (Jarvis Personality).
+    2. If [WEB DATA] is present, use it for 2025/2026 facts.
+    3. If [FILE DATA] is present, analyze it.
     """
     
     final_prompt = user_input
-    if web_data: final_prompt += f"\n\n[GOOGLE SEARCH DATA]:\n{web_data}"
-    if file_context: final_prompt += f"\n\n[FILE DATA]:\n{file_context}"
+    if web_data: final_prompt += f"\n\n[LIVE SEARCH DATA]:\n{web_data}"
+    if file_context: final_prompt += f"\n\n[FILE CONTENT]:\n{file_context}"
 
     try:
-        completion = client_groq.chat.completions.create(
+        res = client_groq.chat.completions.create(
             messages=[{"role": "system", "content": system}, {"role": "user", "content": final_prompt}],
             model="llama-3.3-70b-versatile", temperature=0.6, max_tokens=600
         )
-        return "TXT", completion.choices[0].message.content
+        return "TXT", res.choices[0].message.content
     except Exception as e: return "TXT", f"Error: {e}"
 
 # ==============================================================================
-# 4. UI INTERFACE (MOBILE OPTIMIZED)
+# 5. UI FLOW
 # ==============================================================================
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;900&family=Rajdhani:wght@400;700&display=swap');
-    .stApp { background-color: #000; color: #00E5FF; font-family: 'Rajdhani'; }
-    .hero { text-align: center; font-family:'Orbitron'; font-size: 2.5rem; text-shadow: 0 0 15px #00E5FF; }
-    .stTextInput input { background: #111; color: #fff; border: 1px solid #333; border-radius: 15px; }
-    .stChatMessage { background: #0a0a0a; border: 1px solid #222; border-radius: 10px; }
-    .stChatMessage[data-testid="user"] { border-left: 3px solid #FFF; }
-    .stChatMessage[data-testid="assistant"] { border-left: 3px solid #00E5FF; }
-    </style>
-""", unsafe_allow_html=True)
 
-if "auth" not in st.session_state: st.session_state.auth = False
+# Header
+st.markdown("<div class='hero-text'>VOID OMNI</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center; color:#555;'>SYSTEM ONLINE // {CREATOR_NAME}</div>", unsafe_allow_html=True)
+
+# File Uploader (Expandable)
+with st.expander("📂 UPLOAD FILES / VISION"):
+    uploaded_file = st.file_uploader("Analyze Image or PDF", type=['png', 'jpg', 'jpeg', 'pdf'])
+
+# Chat History
 if "messages" not in st.session_state: st.session_state.messages = []
 
-# --- LOCK SCREEN ---
-if not st.session_state.auth:
-    st.markdown("<br><br><div class='hero'>G1 SECURE</div>", unsafe_allow_html=True)
-    pw = st.text_input("ENTER BIO-KEY", type="password")
-    if st.button("AUTHENTICATE"):
-        if pw == PASSCODE:
-            st.session_state.auth = True
-            st.rerun()
-        else: st.error("ACCESS DENIED")
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        if "image" in m: st.image(m["image"])
+        else: st.write(m["content"])
 
-# --- MAIN APP ---
-else:
-    st.markdown("<div class='hero'>Void by G1</div>", unsafe_allow_html=True)
+# INPUT AREA
+c1, c2 = st.columns([1, 6])
+
+with c1:
+    # VOICE INPUT BUTTON
+    audio_data = mic_recorder(start_prompt="🎤", stop_prompt="🛑", key='mic')
+
+with c2:
+    # TEXT INPUT
+    text_input = st.chat_input("Command Void...")
+
+# LOGIC HANDLER
+final_input = None
+file_data = None
+
+# 1. Handle Voice
+if audio_data:
+    transcription = audio_to_text(audio_data['bytes'])
+    if transcription:
+        final_input = transcription
+
+# 2. Handle Text
+if text_input:
+    final_input = text_input
+
+# 3. Handle File
+if uploaded_file:
+    if "image" in uploaded_file.type:
+        img = Image.open(uploaded_file)
+        # Use Gemini for Vision
+        if final_input: # If user asked a question about image
+            try:
+                vision_res = model_vision.generate_content([final_input, img])
+                st.session_state.messages.append({"role": "user", "content": f"Image Analysis: {final_input}"})
+                st.session_state.messages.append({"role": "assistant", "content": vision_res.text})
+                speak(vision_res.text)
+                st.rerun()
+            except: st.error("Vision Error")
+    elif "pdf" in uploaded_file.type:
+        reader = PyPDF2.PdfReader(uploaded_file)
+        file_data = ""
+        for page in reader.pages[:3]: file_data += page.extract_text()
+
+# 4. EXECUTE
+if final_input and not uploaded_file: # Normal Chat / Image Gen
+    st.session_state.messages.append({"role": "user", "content": final_input})
     
-    # File Uploader (Hidden in sidebar to save space)
-    with st.sidebar:
-        st.header("📂 UPLOAD DATA")
-        uploaded_file = st.file_uploader("Image / PDF", type=['png', 'jpg', 'jpeg', 'pdf'])
-
-    # Chat History
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]):
-            if "image" in m: st.image(m["image"])
-            else: st.write(m["content"])
-
-    # Input
-    txt = st.chat_input("Command Void...")
+    # Brain Processing
+    type_resp, content = brain_engine(final_input, file_data)
     
-    if txt:
-        st.session_state.messages.append({"role": "user", "content": txt})
-        
-        # Process File if exists
-        file_data = None
-        if uploaded_file:
-            file_data = analyze_file(uploaded_file)
-            
-        # Brain Logic
-        type_resp, content = brain_process(txt, file_data)
-        
-        if type_resp == "IMG":
-            st.session_state.messages.append({"role": "assistant", "image": content, "content": "Generating visual..."})
-        else:
-            st.session_state.messages.append({"role": "assistant", "content": content})
-            speak(content)
-            
-        st.rerun()
+    if type_resp == "IMG":
+        st.session_state.messages.append({"role": "assistant", "content": "Visualizing...", "image": content})
+    else:
+        st.session_state.messages.append({"role": "assistant", "content": content})
+        speak(content)
+    
+    st.rerun()
